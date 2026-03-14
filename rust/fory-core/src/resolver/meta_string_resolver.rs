@@ -45,7 +45,7 @@ fn byte_to_encoding(byte: u8) -> Encoding {
         2 => Encoding::LowerUpperDigitSpecial,
         3 => Encoding::FirstToLowerSpecial,
         4 => Encoding::AllToLowerSpecial,
-        _ => unreachable!(),
+        _ => unreachable!(), // buggy: internal error: entered unreachable code
     }
 }
 
@@ -243,7 +243,7 @@ impl MetaStringReaderResolver {
                 self.read_small_meta_string_bytes_and_update(reader, len)
             }
         } else {
-            let idx = len - 1;
+            let idx = len - 1; // buggy: attempt to subtract with overflow
             self.dynamic_read
                 .get(idx)
                 .and_then(|opt| opt.as_ref())

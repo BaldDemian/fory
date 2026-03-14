@@ -17,6 +17,7 @@
 
 use fory_core::meta::{FieldInfo, FieldType, MetaString, TypeMeta};
 use fory_core::types::TypeId;
+use fory_core::Reader;
 
 #[test]
 fn test_meta_hash() {
@@ -40,4 +41,30 @@ fn test_meta_hash() {
     )
     .unwrap();
     assert_ne!(meta.get_hash(), 0);
+}
+
+#[test]
+fn invalid_field_name_bytes_should_return_error_not_panic() {
+    // Field header:
+    // - encoding bits: 01 (ALL_TO_LOWER_SPECIAL)
+    // - size bits: 0 => name length = 1
+    // - nullable/track_ref: false
+    let bytes = [0x40, TypeId::UNKNOWN as u8, 0x78];
+    // 0x78 produces LOWER_SPECIAL char value 30 (>29), which is invalid.
+    let mut reader = Reader::new(&bytes);
+    let result = FieldInfo::from_bytes(&mut reader);
+    assert!(result.is_err());
+}
+
+#[test]
+fn field_id_extension_overflow_should_return_error_not_panic() {
+    // Field header:
+    // - encoding bits: 11 (FIELD_ID mode)
+    // - size bits: 1111 => requires extended varuint32 field id part
+    // - nullable/track_ref: false
+    let bytes = [0xFC, 0xFF, 0xFF, 0x01, TypeId::UNKNOWN as u8];
+    // extended part = 32767, computed field id = 15 + 32767 => i16 overflow
+    let mut reader = Reader::new(&bytes);
+    let result = FieldInfo::from_bytes(&mut reader);
+    assert!(result.is_err());
 }

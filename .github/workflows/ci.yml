@@ -519,6 +519,25 @@ jobs:
       - name: Run Rust CI
         run: python ./ci/run_ci.py rust
 
+  rust_fuzz:
+    name: Rust Fuzz Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run deserialize_bytes fuzz smoke test
+        run: |
+          cd rust
+          cargo +nightly fuzz run deserialize_bytes -- -max_total_time=60
+
   rust_xlang:
     name: Rust Xlang Test
     runs-on: ubuntu-latest

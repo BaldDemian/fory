@@ -21,10 +21,7 @@ members = [
     "fory",
     "fory-derive",
     "tests",
-]
-
-exclude = [
-    "fuzz"
+    "fuzz",
 ]
 
 resolver = "2"

@@ -1,0 +1,29 @@
+[package]
+name = "fory-fuzz"
+version = "0.0.0"
+license = "Apache-2.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.fory-core]
+path = "../fory-core"
+
+[[bin]]
+name = "field_info"
+path = "fuzz_targets/field_info.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "meta_string"
+path = "fuzz_targets/meta_string.rs"
+test = false
+doc = false
+bench = false
