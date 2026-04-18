@@ -18,9 +18,11 @@
 """Tests for generated code consistency across frontends."""
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from textwrap import dedent
 from typing import Dict, Tuple, Type
 
+from fory_compiler.cli import resolve_imports
 from fory_compiler.frontend.fbs import FBSFrontend
 from fory_compiler.frontend.fdl.lexer import Lexer
 from fory_compiler.frontend.fdl.parser import Parser
@@ -597,3 +599,143 @@ def test_go_bfloat16_generation():
         in content
     )
     assert "\tListVal []bfloat16.BFloat16" in content
+
+
+def test_rust_escapes_keywords():
+    schema = parse_fdl(
+        dedent(
+            """
+            package Self;
+
+            enum match {
+                self = 0;
+            }
+
+            union crate {
+                string self = 1;
+            }
+
+            message type {
+                message super {
+                    string bar = 1;
+                }
+
+                super foo = 1;
+            }
+
+            message Holder {
+                type foo = 1;
+                match bar = 2;
+                crate foo_bar = 3;
+            }
+            """
+        )
+    )
+    rust_files = generate_files(schema, RustGenerator)
+    assert "Self_.rs" in rust_files
+    rust_output = render_files(rust_files)
+    assert "pub mod r#type {" in rust_output
+    assert "pub struct Super {" in rust_output
+    assert "pub struct Type {" in rust_output
+    assert "pub foo: r#type::Super," in rust_output
+    assert "pub enum Match {" in rust_output
+    assert "Self_ = 0," in rust_output
+    assert "pub enum Crate {" in rust_output
+    assert "Self_(String)," in rust_output
+    assert "impl Default for Crate {" in rust_output
+    assert "pub foo: Type," in rust_output
+    assert "pub bar: Match," in rust_output
+    assert "pub foo_bar: Crate," in rust_output
+
+
+def test_rust_handles_normalized_name_collisions():
+    schema = parse_fdl(
+        dedent(
+            """
+            message foo_bar {}
+
+            message FooBar {}
+
+            enum match {
+                self = 0;
+                Self = 1;
+            }
+
+            union crate {
+                string self = 1;
+                string Self = 2;
+            }
+
+            message Holder {
+                string fooBar = 1;
+                string foo_bar = 2;
+                string self = 3;
+                string self_ = 4;
+                foo_bar a = 5;
+                FooBar b = 6;
+                match c = 7;
+                crate d = 8;
+            }
+            """
+        )
+    )
+    rust_output = render_files(generate_files(schema, RustGenerator))
+    assert "pub struct FooBar {" in rust_output
+    assert "pub struct FooBar1 {" in rust_output
+    assert "pub enum Match {" in rust_output
+    assert "Self_ = 0," in rust_output
+    assert "Self1 = 1," in rust_output
+    assert "pub enum Crate {" in rust_output
+    assert "Self_(String)," in rust_output
+    assert "Self1(String)," in rust_output
+    assert "pub foo_bar: String," in rust_output
+    assert "pub foo_bar1: String," in rust_output
+    assert "pub self_: String," in rust_output
+    assert "pub self_1: String," in rust_output
+    assert "pub a: FooBar," in rust_output
+    assert "pub b: FooBar1," in rust_output
+    assert "pub c: Match," in rust_output
+    assert "pub d: Crate," in rust_output
+
+    with TemporaryDirectory() as tmp:
+        idl_dir = Path(tmp)
+        common_fdl = idl_dir / "common.fdl"
+        main_fdl = idl_dir / "main.fdl"
+        common_fdl.write_text(
+            dedent(
+                """
+                package common;
+
+                message foo_bar {
+                    string a = 1;
+                }
+
+                message FooBar {
+                    string b = 1;
+                }
+                """
+            )
+        )
+        main_fdl.write_text(
+            dedent(
+                """
+                package mainpkg;
+                import "common.fdl";
+
+                message Holder {
+                    foo_bar left = 1;
+                    FooBar right = 2;
+                }
+                """
+            )
+        )
+        common_schema = resolve_imports(common_fdl, [idl_dir])
+        main_schema = resolve_imports(main_fdl, [idl_dir])
+        common_output = render_files(generate_files(common_schema, RustGenerator))
+        main_output = render_files(generate_files(main_schema, RustGenerator))
+
+    assert "pub struct FooBar {" in common_output
+    assert "pub struct FooBar1 {" in common_output
+    assert 'register_by_namespace::<FooBar1>("common", "FooBar")' in common_output
+    assert "pub left: crate::common::FooBar," in main_output
+    assert "pub right: crate::common::FooBar1," in main_output
