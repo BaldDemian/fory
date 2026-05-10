@@ -21,6 +21,9 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Dict, Tuple, Type
 
+import pytest
+
+from fory_compiler.cli import main as foryc_main
 from fory_compiler.frontend.fbs import FBSFrontend
 from fory_compiler.frontend.fdl.lexer import Lexer
 from fory_compiler.frontend.fdl.parser import Parser
@@ -402,8 +405,8 @@ def test_generated_code_map_types_equivalent():
     assert_all_languages_equal(schemas)
 
     rust_output = render_files(generate_files(schemas["fdl"], RustGenerator))
-    assert "RcWeak<MapValue>" in rust_output
-    assert "Option<i32>" in rust_output
+    assert "::fory::RcWeak<MapValue>" in rust_output
+    assert "::std::option::Option<i32>" in rust_output
 
     cpp_output = render_files(generate_files(schemas["fdl"], CppGenerator))
     assert "SharedWeak<MapValue>" in cpp_output
@@ -498,7 +501,7 @@ def test_generated_code_tree_ref_options_equivalent():
     assert_all_languages_equal(schemas)
 
     rust_output = render_files(generate_files(schemas["fdl"], RustGenerator))
-    assert "ArcWeak<TreeNode>" in rust_output
+    assert "::fory::ArcWeak<TreeNode>" in rust_output
 
     cpp_output = render_files(generate_files(schemas["fdl"], CppGenerator))
     assert "SharedWeak<TreeNode>" in cpp_output
@@ -814,3 +817,206 @@ def test_rust_generated_code_uses_absolute_paths():
     assert "pub parent: ::fory::ArcWeak<String>," in rust_output
     assert "pub fn register_types(fory: &mut ::fory::Fory)" in rust_output
     assert "static FORY: ::std::sync::OnceLock<::fory::Fory>" in rust_output
+
+
+def test_rust_escapes_keywords_basic():
+    schema = parse_fdl(
+        dedent(
+            """
+            package demo;
+
+            message type {
+                string type = 1;
+                string self = 2;
+                string crate = 3;
+                string extern = 4;
+                string raw = 5;
+            }
+            """
+        )
+    )
+    rust_files = generate_files(schema, RustGenerator)
+    rust_output = render_files(rust_files)
+
+    assert "demo.rs" in rust_files
+    assert "pub struct Type {" in rust_output
+    assert "pub r#type: ::std::string::String," in rust_output
+    assert "pub self_: ::std::string::String," in rust_output
+    assert "pub crate_: ::std::string::String," in rust_output
+    assert "pub r#extern: ::std::string::String," in rust_output
+    assert "pub raw: ::std::string::String," in rust_output
+
+
+def test_rust_escapes_keywords_complex():
+    schema = parse_fdl(
+        dedent(
+            """
+            package Self;
+
+            enum match {
+                self = 0;
+            }
+
+            enum PhoneType {
+                PHONE_TYPE_MOBILE = 0;
+            }
+
+            union crate {
+                string self = 1;
+            }
+
+            message _1 {
+                string raw = 1;
+            }
+
+            message String {
+                string value = 1;
+            }
+
+            message Vec {
+                list<string> values = 1;
+            }
+
+            message Fory {
+                string value = 1;
+            }
+
+            message std {
+                message inner {
+                    string value = 1;
+                }
+
+                inner value = 1;
+            }
+
+            message fory_core {
+                message inner {
+                    string value = 1;
+                }
+
+                inner value = 1;
+            }
+
+            message type {
+                message super {
+                    string match = 1;
+                }
+
+                super foo = 1;
+            }
+
+            message Holder {
+                type foo = 1;
+                match bar = 2;
+                crate foo_bar = 3;
+                _1 numeric = 4;
+            }
+            """
+        )
+    )
+    rust_files = generate_files(schema, RustGenerator)
+    rust_output = render_files(rust_files)
+
+    assert "self_.rs" in rust_files
+    assert "#[derive(::fory::ForyStruct" in rust_output
+    assert "#[derive(::fory::ForyEnum" in rust_output
+    assert "#[derive(::fory::ForyUnion" in rust_output
+    assert "pub mod r#type {" in rust_output
+    assert "pub mod std {" in rust_output
+    assert "pub mod fory_core {" in rust_output
+    assert "pub struct Super {" in rust_output
+    assert "pub r#match: ::std::string::String," in rust_output
+    assert "pub foo: r#type::Super," in rust_output
+    assert "pub enum Match {" in rust_output
+    assert "Self_ = 0," in rust_output
+    assert "pub enum PhoneType {" in rust_output
+    assert "    Mobile = 0," in rust_output
+    assert "pub enum Crate {" in rust_output
+    assert "Self_(::std::string::String)," in rust_output
+    assert "pub struct _1 {" in rust_output
+    assert "pub numeric: _1," in rust_output
+    assert "pub struct String {" in rust_output
+    assert "pub value: ::std::string::String," in rust_output
+    assert "pub struct Vec {" in rust_output
+    assert "pub values: ::std::vec::Vec<::std::string::String>," in rust_output
+    assert "pub struct Fory {" in rust_output
+    assert "pub fn register_types(fory: &mut ::fory::Fory)" in rust_output
+    assert "pub(super) fn get_fory() -> &'static ::fory::Fory" in rust_output
+    assert "static FORY: ::std::sync::OnceLock<::fory::Fory>" in rust_output
+
+
+def test_rust_rejects_normalized_name_collisions():
+    collision_cases = [
+        """
+        message foo_bar {}
+
+        message FooBar {}
+        """,
+        """
+        message Holder {
+            string fooBar = 1;
+            string foo_bar = 2;
+        }
+        """,
+        """
+        message Holder {
+            string self = 1;
+            string self_ = 2;
+        }
+        """,
+        """
+        union crate {
+            string self = 1;
+            string Self = 2;
+        }
+        """,
+    ]
+
+    for source in collision_cases:
+        schema = parse_fdl(dedent(source))
+        with pytest.raises(ValueError, match="Rust name collision"):
+            generate_files(schema, RustGenerator)
+
+
+def test_rust_rejects_same_output_path_collisions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    first_fdl = tmp_path / "first.fdl"
+    second_fdl = tmp_path / "second.fdl"
+    rust_out = tmp_path / "rust"
+    first_fdl.write_text(
+        dedent(
+            """
+            package foo.bar;
+
+            message First {
+                string value = 1;
+            }
+            """
+        )
+    )
+    second_fdl.write_text(
+        dedent(
+            """
+            package foo_bar;
+
+            message Second {
+                string value = 1;
+            }
+            """
+        )
+    )
+    exit_code = foryc_main(
+        [
+            str(first_fdl),
+            str(second_fdl),
+            "--rust_out",
+            str(rust_out),
+            "-I",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "Rust output path collision" in captured.err
